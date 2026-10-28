@@ -25,22 +25,25 @@ dune runtest
 open Acterious
 
 let () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let pool =
-    Pool.create ~sw ~domain_mgr:(Eio.Stdenv.domain_mgr env) ~domains:2 ()
-  in
-  Fun.protect ~finally:(fun () -> Pool.shutdown pool) (fun () ->
-      let counter =
-        Actor.spawn pool ~initial:0 (fun total amount ->
-            let total = total + amount in
-            Printf.printf "%d\n%!" total;
-            total)
-      in
-      if not (Actor.send counter 10) then failwith "送信先が終了しています";
-      if not (Actor.send counter 20) then failwith "送信先が終了しています";
-      Actor.stop counter;
-      Actor.join counter)
+  Eio_main.run
+  @@ fun env ->
+  Eio.Switch.run
+  @@ fun sw ->
+  let pool = Pool.create ~sw ~domain_mgr:(Eio.Stdenv.domain_mgr env) ~domains:2 () in
+  Fun.protect
+    ~finally:(fun () -> Pool.shutdown pool)
+    (fun () ->
+       let counter =
+         Actor.spawn pool ~initial:0 (fun total amount ->
+           let total = total + amount in
+           Printf.printf "%d\n%!" total;
+           total)
+       in
+       if not (Actor.send counter 10) then failwith "送信先が終了しています";
+       if not (Actor.send counter 20) then failwith "送信先が終了しています";
+       Actor.stop counter;
+       Actor.join counter)
+;;
 ```
 
 プールを使う箇所は [Fun.protect](https://ocaml.org/manual/5.5/api/Fun.html) で囲み、`finally` で必ず `Pool.shutdown` を呼んでください。ワーカーは受理済みのメッセージを最後まで処理するため親からの[キャンセルを遮蔽](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html)しており、Switch を抜けるだけでは停止しません。なお、`Actor.spawn`、`send`、`stop` は完了を待たずにすぐ戻るため Eio の外（通常の Domain）からも呼べますが、`Pool.create`、`Pool.shutdown`、`Actor.join` は Eio の Fiber 上で呼び出す必要があります。
@@ -131,9 +134,23 @@ flowchart TD
 
 `dune runtest` で実行される [test/actor_test.ml](test/actor_test.ml) では、FIFO 順序や状態の引き継ぎ、1 件ごとの交代、複数 Domain での並列実行に加え、単一 Domain 上でのパイプ I/O、待機中の直列性維持、キャンセルや例外発生時の後始末などを検証しています。タイミングによる不安定さを避けるため、スリープは使わず [Eio.Promise](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) と標準の [Condition](https://ocaml.org/manual/5.5/api/Condition.html) で実行順を揃えています。
 
+## コーディング規約
+
+整形には OCamlFormat 0.29.0 の `janestreet` プロファイルを使います。
+命名やコメントは [OCaml Programming Guidelines](https://ocaml.org/docs/guidelines) を参考にし、
+関数・変数・型は `snake_case`、モジュール・コンストラクターは大文字で始めます。
+公開 API の使い方はシグネチャの文書コメント（`(** ... *)`）、実装上の理由や不変条件は該当コードの通常コメント（`(* ... *)`）に記述します。
+このプロジェクトでは、シグネチャも `.ml` にまとめます。
+
+```sh
+opam install 'ocamlformat=0.29.0'
+dune fmt          # 整形を適用
+dune build @fmt  # 整形のチェック
+```
+
 ## 参考資料
 
-公開 API の仕様は [lib/acterious.mli](lib/acterious.mli)、実装は [lib/acterious.ml](lib/acterious.ml) を参照してください。
+公開 API と実装は [lib/acterious.ml](lib/acterious.ml) にまとめています。各関数の使い方はファイル末尾のシグネチャの文書コメント、内部の同期や状態管理は実装内のコメントを参照してください。
 
 - [OCaml 5.5 API リファレンス](https://ocaml.org/manual/5.5/api/index.html) / [OCaml 5.5.0 リリース情報](https://ocaml.org/releases/5.5.0)
 - [Eio API リファレンス](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) / [Eio 公式 README](https://github.com/ocaml-multicore/eio)
