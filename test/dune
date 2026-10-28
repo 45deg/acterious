@@ -1,0 +1,3 @@
+(test
+ (name actor_test)
+ (libraries acterious eio_main eio.unix))

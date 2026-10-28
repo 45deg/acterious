@@ -1,0 +1,4 @@
+(library
+ (name acterious)
+ (public_name acterious)
+ (libraries eio))
