@@ -150,7 +150,7 @@ dune build @fmt  # 整形のチェック
 
 ## 参考資料
 
-公開 API と実装は [lib/acterious.ml](lib/acterious.ml) にまとめています。各関数の使い方はファイル末尾のシグネチャの文書コメント、内部の同期や状態管理は実装内のコメントを参照してください。
+公開 API と実装は [lib/acterious.ml](lib/acterious.ml) にまとめています。Eio の Fiber や Promise、Flow などの API も併せて参照してください。
 
 - [OCaml 5.5 API リファレンス](https://ocaml.org/manual/5.5/api/index.html) / [OCaml 5.5.0 リリース情報](https://ocaml.org/releases/5.5.0)
 - [Eio API リファレンス](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) / [Eio 公式 README](https://github.com/ocaml-multicore/eio)

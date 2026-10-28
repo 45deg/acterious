@@ -1,6 +1,52 @@
-(** 固定数の Domain 上で型付き Actor を動かす、学習用フレームワーク。 *)
+module type S = sig
+  module Pool : sig
+    (** 固定数のワーカー Domain を持つプール。 *)
+    type t
 
-(* 末尾のシグネチャで公開 API を限定し、内部の型と補助関数を隠す。 *)
+    (** [domains] 個のワーカーを [sw] 内に作る。[domains < 1] は [Invalid_argument]。
+        各ワーカーで Eio が動き、Actor を増やしても Domain 数は増えない。
+        Eio の Fiber 上で呼び、[sw] を抜ける前に [Fun.protect] の
+        [finally] で必ず [shutdown] すること。 *)
+    val create
+      :  sw:Eio.Switch.t
+      -> domain_mgr:[> Eio.Domain_manager.ty ] Eio.Domain_manager.t
+      -> domains:int
+      -> unit
+      -> t
+
+    (** 全 Actor への送信と新規起動を締め切り、受理済みの処理とワーカーの終了を待つ。
+        Eio の Fiber 上で呼ぶ。複数回呼んでも安全。
+        同じプールのハンドラー内からは呼ばないこと。 *)
+    val shutdown : t -> unit
+  end
+
+  module Actor : sig
+    (** ['message] 型のメッセージを受け取る宛先。 *)
+    type 'message t
+
+    (** 初期状態と、状態・メッセージから次の状態を返すハンドラーで起動する。
+        閉じたプールでは [Invalid_argument]。Eio の外の Domain からも呼べる。
+        状態とメッセージはコピーしないため、外部と可変データを共有する場合は同期が必要。 *)
+    val spawn : Pool.t -> initial:'state -> ('state -> 'message -> 'state) -> 'message t
+
+    (** 追加に成功すれば [true]、Actor またはプールが閉じていれば [false]。
+        [true] は処理完了を意味しない。メールボックスに容量制限はなく、空き待ちはしない。
+        Eio の外も含め複数 Domain から送信でき、待機は短い Mutex の取得だけ。 *)
+    val send : 'message t -> 'message -> bool
+
+    (** 新規送信を締め切る。実行中のハンドラーは中断せず、受理済みの処理も待たない。
+        Eio の外からも呼べて、複数回呼んでも安全。 *)
+    val stop : 'message t -> unit
+
+    (** 閉鎖後の全処理完了を Eio の Fiber 上で待つ。通常は先に [stop] する。
+        待機中は他 Fiber が進み、呼び出し元のキャンセルでも Actor は停止しない。
+        ハンドラーの失敗は元のバックトレースとともに再送出する。
+        自己待ちや循環待ちを避けるため、ハンドラー内からは呼ばないこと。 *)
+    val join : 'message t -> unit
+  end
+end
+
+(* S に含まれる API だけを公開し、内部の型と補助関数を隠す。 *)
 include (
 struct
   (* ロック内では Eio の待機やユーザーのハンドラーを実行しない。
@@ -204,50 +250,4 @@ struct
     ;;
   end
 end :
-sig
-  module Pool : sig
-    (** 固定数のワーカー Domain を持つプール。 *)
-    type t
-
-    (** [domains] 個のワーカーを [sw] 内に作る。[domains < 1] は [Invalid_argument]。
-        各ワーカーで Eio が動き、Actor を増やしても Domain 数は増えない。
-        Eio の Fiber 上で呼び、[sw] を抜ける前に [Fun.protect] の
-        [finally] で必ず [shutdown] すること。 *)
-    val create
-      :  sw:Eio.Switch.t
-      -> domain_mgr:[> Eio.Domain_manager.ty ] Eio.Domain_manager.t
-      -> domains:int
-      -> unit
-      -> t
-
-    (** 全 Actor への送信と新規起動を締め切り、受理済みの処理とワーカーの終了を待つ。
-        Eio の Fiber 上で呼ぶ。複数回呼んでも安全。
-        同じプールのハンドラー内からは呼ばないこと。 *)
-    val shutdown : t -> unit
-  end
-
-  module Actor : sig
-    (** ['message] 型のメッセージを受け取る宛先。 *)
-    type 'message t
-
-    (** 初期状態と、状態・メッセージから次の状態を返すハンドラーで起動する。
-        閉じたプールでは [Invalid_argument]。Eio の外の Domain からも呼べる。
-        状態とメッセージはコピーしないため、外部と可変データを共有する場合は同期が必要。 *)
-    val spawn : Pool.t -> initial:'state -> ('state -> 'message -> 'state) -> 'message t
-
-    (** 追加に成功すれば [true]、Actor またはプールが閉じていれば [false]。
-        [true] は処理完了を意味しない。メールボックスに容量制限はなく、空き待ちはしない。
-        Eio の外も含め複数 Domain から送信でき、待機は短い Mutex の取得だけ。 *)
-    val send : 'message t -> 'message -> bool
-
-    (** 新規送信を締め切る。実行中のハンドラーは中断せず、受理済みの処理も待たない。
-        Eio の外からも呼べて、複数回呼んでも安全。 *)
-    val stop : 'message t -> unit
-
-    (** 閉鎖後の全処理完了を Eio の Fiber 上で待つ。通常は先に [stop] する。
-        待機中は他 Fiber が進み、呼び出し元のキャンセルでも Actor は停止しない。
-        ハンドラーの失敗は元のバックトレースとともに再送出する。
-        自己待ちや循環待ちを避けるため、ハンドラー内からは呼ばないこと。 *)
-    val join : 'message t -> unit
-  end
-end)
+  S)
