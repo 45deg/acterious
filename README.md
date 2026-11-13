@@ -50,7 +50,14 @@ let () =
 
 Wrap the code that uses the pool in [`Fun.protect`](https://ocaml.org/manual/5.5/api/Fun.html) and call `Pool.shutdown` in `finally`. Because workers shield themselves from parent [cancellation](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html) to finish processing accepted messages, leaving the switch alone does not stop them.
 
-`Actor.spawn`, `Actor.send`, and `Actor.stop` return without waiting for handlers to finish, so they can also be called from domains outside Eio. Call `Pool.create`, `Pool.shutdown`, and `Actor.join` from an Eio fiber.
+| Function | Type | Caller | Role |
+| --- | --- | --- | --- |
+| `Pool.create` | `sw:Eio.Switch.t -> domain_mgr:_ Eio.Domain_manager.t -> domains:int -> unit -> Pool.t` | Eio fiber | Start a fixed number of worker domains |
+| `Pool.shutdown` | `Pool.t -> unit` | Eio fiber | Close the pool and wait for accepted work and workers to finish |
+| `Actor.spawn` | `Pool.t -> initial:'state -> ('state -> 'message -> 'state) -> 'message Actor.t` | Any domain | Create an actor with initial state and a message handler |
+| `Actor.send` | `'message Actor.t -> 'message -> bool` | Any domain | Enqueue a message (`false` if the actor or pool is closed) |
+| `Actor.stop` | `'message Actor.t -> unit` | Any domain | Close the mailbox to new sends without interrupting work |
+| `Actor.join` | `'message Actor.t -> unit` | Eio fiber | Wait for the actor to finish and re-raise any handler exception |
 
 ## Domains and fibers
 

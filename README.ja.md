@@ -48,7 +48,16 @@ let () =
 ;;
 ```
 
-プールを使う箇所は [Fun.protect](https://ocaml.org/manual/5.5/api/Fun.html) で囲み、`finally` で必ず `Pool.shutdown` を呼んでください。ワーカーは受理済みのメッセージを最後まで処理するため親からの[キャンセルを遮蔽](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html)しており、Switch を抜けるだけでは停止しません。なお、`Actor.spawn`、`Actor.send`、`Actor.stop` は完了を待たずにすぐ戻るため Eio の外（通常の Domain）からも呼べますが、`Pool.create`、`Pool.shutdown`、`Actor.join` は Eio の Fiber 上で呼び出す必要があります。
+プールを使う箇所は [Fun.protect](https://ocaml.org/manual/5.5/api/Fun.html) で囲み、`finally` で必ず `Pool.shutdown` を呼んでください。ワーカーは受理済みのメッセージを最後まで処理するため親からの[キャンセルを遮蔽](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html)しており、Switch を抜けるだけでは停止しません。
+
+| 関数 | 型 | 呼び出し元 | 役割 |
+| --- | --- | --- | --- |
+| `Pool.create` | `sw:Eio.Switch.t -> domain_mgr:_ Eio.Domain_manager.t -> domains:int -> unit -> Pool.t` | Eio の Fiber | 固定数のワーカー Domain を起動する |
+| `Pool.shutdown` | `Pool.t -> unit` | Eio の Fiber | プールを閉じ、受理済みの処理と全ワーカーの終了を待つ |
+| `Actor.spawn` | `Pool.t -> initial:'state -> ('state -> 'message -> 'state) -> 'message Actor.t` | 任意の Domain | 初期状態とハンドラーを指定して Actor を起動する |
+| `Actor.send` | `'message Actor.t -> 'message -> bool` | 任意の Domain | メールボックスへメッセージを追加する（閉鎖済みなら `false`） |
+| `Actor.stop` | `'message Actor.t -> unit` | 任意の Domain | 実行中の処理を止めずに新規送信を締め切る |
+| `Actor.join` | `'message Actor.t -> unit` | Eio の Fiber | Actor の処理完了を待ち、未捕捉例外があれば再送出する |
 
 ## Domain と Fiber の役割
 
