@@ -1,6 +1,8 @@
 open Acterious
 
-(* 返信先のアクターもメッセージに含めて渡す。宛先の型によって送れる値の型が決まる。 *)
+(* 返信先のアクターもメッセージに含めて渡す。宛先の型によって送れる値の型が決まる。
+
+   Pass the reply actor inside the message; its type constrains the reply value. *)
 type message =
   | Add of int
   | Read of int Actor.t
@@ -30,7 +32,10 @@ let () =
        send counter (Add 20);
        send counter (Read printer);
        (* 先に counter の終了を待つことで、printer への返信が送信済みであることを保証してから
-          printer を閉じる。 *)
+          printer を閉じる。
+
+          Wait for counter to finish first so its reply to printer is guaranteed to be
+          queued before printer is stopped. *)
        Actor.stop counter;
        Actor.join counter;
        Actor.stop printer;

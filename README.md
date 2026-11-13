@@ -1,10 +1,12 @@
 # Acterious
 
-Acterious は、OCaml 5.5.0 と [Eio](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) で[並行・並列処理](https://ocaml.org/manual/5.5/parallelism.html)とアクターモデルを学ぶための小さなフレームワークです。固定数のワーカー Domain からなるプール上で、型付きメールボックスと状態を持つ Actor を動かします。各 Actor のメッセージは到着順に 1 件ずつ処理され、ハンドラーが I/O などで待機している間は同じ Domain 上で他の Actor が動きます。
+[日本語](README.ja.md)
 
-## ビルドと実行
+Acterious is a small framework for learning the actor model and [concurrent and parallel programming](https://ocaml.org/manual/5.5/parallelism.html) with OCaml 5.5.0 and [Eio](https://ocaml-multicore.github.io/eio/eio/Eio/index.html). It runs actors with typed mailboxes and isolated state on a fixed-size pool of worker domains. Each actor handles messages one at a time in the order they reach its mailbox. While a handler waits on I/O or other Eio operations, other actors can run on the same domain.
 
-OCaml 5.5.0 以降、Dune 3.9 以降、Eio 1.4 以降（`eio` および `eio_main`）が必要です。手元に OCaml 5.5.0 の switch がすでにある場合は、最初の 2 行は不要です。
+## Build and run
+
+You need OCaml 5.5.0 or later, Dune 3.9 or later, and Eio 1.4 or later (`eio` and `eio_main`). If you already have an active switch with OCaml 5.5.0 or later, you can skip the first two lines.
 
 ```sh
 opam switch create . 5.5.0
@@ -15,11 +17,11 @@ dune exec examples/counter.exe
 dune runtest
 ```
 
-サンプルの [examples/counter.ml](examples/counter.ml) は、カウンタ用の Actor に `10` と `20` を足したあと、表示用の Actor に合計値を送って `合計: 30` と出力します。Actor の宛先（`'message Actor.t`）には受信できるメッセージの型が付くため、型が合わない送信はコンパイル時に弾かれます。
+The counter example in [examples/counter.ml](examples/counter.ml) adds `10` and `20` in one actor, then sends the total to another actor that prints it. An actor address (`'message Actor.t`) carries the type of messages it accepts, so sending a message of the wrong type fails at compile time.
 
-## 基本の使い方
+## Basic usage
 
-[Eio_main.run](https://ocaml-multicore.github.io/eio/eio_main/Eio_main/index.html) と [Eio.Switch.run](https://ocaml-multicore.github.io/eio/eio/Eio/Switch/index.html) の内側でワーカープールを作り、その上に Actor を起動します。`Actor.spawn` には初期状態と、現在の状態およびメッセージから次の状態を返すハンドラーを渡します。
+Create a worker pool inside [`Eio_main.run`](https://ocaml-multicore.github.io/eio/eio_main/Eio_main/index.html) and [`Eio.Switch.run`](https://ocaml-multicore.github.io/eio/eio/Eio/Switch/index.html), then spawn actors on it. Pass `Actor.spawn` an initial state and a handler that takes the current state and a message and returns the next state.
 
 ```ocaml
 open Acterious
@@ -39,118 +41,116 @@ let () =
            Printf.printf "%d\n%!" total;
            total)
        in
-       if not (Actor.send counter 10) then failwith "送信先が終了しています";
-       if not (Actor.send counter 20) then failwith "送信先が終了しています";
+       if not (Actor.send counter 10) then failwith "The recipient has stopped";
+       if not (Actor.send counter 20) then failwith "The recipient has stopped";
        Actor.stop counter;
        Actor.join counter)
 ;;
 ```
 
-プールを使う箇所は [Fun.protect](https://ocaml.org/manual/5.5/api/Fun.html) で囲み、`finally` で必ず `Pool.shutdown` を呼んでください。ワーカーは受理済みのメッセージを最後まで処理するため親からの[キャンセルを遮蔽](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html)しており、Switch を抜けるだけでは停止しません。なお、`Actor.spawn`、`send`、`stop` は完了を待たずにすぐ戻るため Eio の外（通常の Domain）からも呼べますが、`Pool.create`、`Pool.shutdown`、`Actor.join` は Eio の Fiber 上で呼び出す必要があります。
+Wrap the code that uses the pool in [`Fun.protect`](https://ocaml.org/manual/5.5/api/Fun.html) and call `Pool.shutdown` in `finally`. Because workers shield themselves from parent [cancellation](https://ocaml-multicore.github.io/eio/eio/Eio/Cancel/index.html) to finish processing accepted messages, leaving the switch alone does not stop them.
 
-## Domain と Fiber の役割
+`Actor.spawn`, `Actor.send`, and `Actor.stop` return without waiting for handlers to finish, so they can also be called from domains outside Eio. Call `Pool.create`, `Pool.shutdown`, and `Actor.join` from an Eio fiber.
 
-[Domain](https://ocaml.org/manual/5.5/api/Domain.html) は CPU コアを使って並列に動く実行単位です。`Pool.create ~domains:2` を呼ぶと、呼び出し元とは別に 2 つのワーカー Domain が立ち上がり、それぞれで Eio のイベントループが動きます。Domain 数はプール作成時に固定され、Actor をいくつ起動しても増えません。ワーカー数は [Domain.recommended_domain_count](https://ocaml.org/manual/5.5/api/Domain.html) を目安に設定してください。
+## Domains and fibers
+
+OCaml [`Domain`s](https://ocaml.org/manual/5.5/api/Domain.html) run in parallel on separate CPU cores. `Pool.create ~domains:2` starts two worker domains in addition to the calling domain, each running its own Eio event loop. The number of domains is fixed at pool creation and does not grow as you spawn more actors. Use [`Domain.recommended_domain_count`](https://ocaml.org/manual/5.5/api/Domain.html) as a guide when choosing the number of workers.
 
 ```mermaid
 flowchart TB
-    subgraph Caller["呼び出し元 Domain"]
-        App["アプリケーションの Fiber"]
+    subgraph Caller["Calling domain"]
+        App["Application fiber"]
         Manager["domain_mgr"]
     end
     App -->|Pool.create| Manager
-    Manager -->|起動| Loop1
-    Manager -->|起動| Loop2
-    subgraph D1["ワーカー Domain 1"]
-        Loop1["Eio イベントループ"]
-        A["Actor A のハンドラー Fiber"]
-        B["Actor B のハンドラー Fiber"]
+    Manager -->|start| Loop1
+    Manager -->|start| Loop2
+    subgraph D1["Worker domain 1"]
+        Loop1["Eio event loop"]
+        A["Actor A handler fiber"]
+        B["Actor B handler fiber"]
         Loop1 --> A
         Loop1 --> B
     end
-    subgraph D2["ワーカー Domain 2"]
-        Loop2["Eio イベントループ"]
-        C["Actor C のハンドラー Fiber"]
+    subgraph D2["Worker domain 2"]
+        Loop2["Eio event loop"]
+        C["Actor C handler fiber"]
         Loop2 --> C
     end
 ```
 
-[Fiber](https://ocaml-multicore.github.io/eio/eio/Eio/Fiber/index.html) は 1 つの Domain 内で処理を切り替える軽量な実行単位です。Acterious は Actor ごとに Fiber を常駐させるのではなく、メッセージを 1 件処理するたびに Fiber を起動します。ハンドラーが Eio の I/O や [Eio.Promise.await](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) で待機すると Fiber が中断され、同じ Domain 上で他の Actor の処理が進みます。
+[`Fiber`s](https://ocaml-multicore.github.io/eio/eio/Eio/Fiber/index.html) are lightweight tasks that take turns running within a domain. Rather than keeping a long-lived fiber per actor, Acterious starts a fiber for each message it handles. When a handler waits on Eio I/O or [`Eio.Promise.await`](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html), its fiber suspends and another actor can run on the same domain.
 
 ```mermaid
 sequenceDiagram
-    participant Q as 実行待ちキュー
-    participant A as Actor A の Fiber
+    participant Q as Ready queue
+    participant A as Actor A fiber
     participant IO as I/O
-    participant B as Actor B の Fiber
-    Note over A,B: A と B は同じワーカー Domain 上
-    Q->>A: メッセージを一件処理
-    A->>IO: 読み取りを要求
-    Note over A: Fiber を中断して待つ
-    Q->>B: 別の Actor のメッセージを処理
-    B-->>Q: 完了後、残りがあれば末尾へ再登録
-    IO-->>A: データが到着
-    Note over A: スケジューラーが Fiber を再開
-    A-->>Q: 完了後、残りがあれば末尾へ再登録
+    participant B as Actor B fiber
+    Note over A,B: A and B run on the same worker domain
+    Q->>A: Dispatch one message
+    A->>IO: Request a read
+    Note over A: Suspend while waiting for I/O
+    Q->>B: Dispatch a message for another actor
+    B-->>Q: On completion, requeue if messages remain
+    IO-->>A: Data arrives
+    Note over A: The scheduler resumes the fiber
+    A-->>Q: On completion, requeue if messages remain
 ```
 
-Fiber の切り替えは協調的に行われるため、長時間の計算や標準ライブラリのブロッキング I/O を行うと、その間は同じ Domain の他の Fiber が動けません。I/O には [Eio.Flow](https://ocaml-multicore.github.io/eio/eio/Eio/Flow/index.html) などの Eio 対応 API を使い、重い計算では適宜 [Eio.Fiber.yield](https://ocaml-multicore.github.io/eio/eio/Eio/Fiber/index.html) を挟むか [Eio.Executor_pool](https://ocaml-multicore.github.io/eio/eio/Eio/Executor_pool/index.html) へ処理を分けてください。
+Fiber scheduling is cooperative: a long computation or a blocking standard-library I/O call prevents other fibers on that domain from running. Use Eio APIs such as [`Eio.Flow`](https://ocaml-multicore.github.io/eio/eio/Eio/Flow/index.html) for I/O, and for CPU-bound work either call [`Eio.Fiber.yield`](https://ocaml-multicore.github.io/eio/eio/Eio/Fiber/index.html) periodically or offload it to [`Eio.Executor_pool`](https://ocaml-multicore.github.io/eio/eio/Eio/Executor_pool/index.html).
 
-## メールボックスと実行順序
+## Mailboxes and scheduling
 
-スケジューリングは、Actor ごとのメールボックスとプール共通の実行待ちキューという 2 段の [Queue](https://ocaml.org/manual/5.5/api/Queue.html) で行います。`Actor.send` でメールボックスにメッセージが入ると、その Actor が実行待ちでも処理中でもないときだけ、1 件分の処理タスクが実行待ちキューに追加されます。
+Scheduling uses two levels of [`Queue`](https://ocaml.org/manual/5.5/api/Queue.html): a mailbox per actor and a ready queue shared by the pool. When `Actor.send` pushes a message to a mailbox, it enqueues a job for one message on the ready queue only if the actor has no queued or running job.
 
 ```mermaid
 flowchart TD
-    Sender["送信元"] -->|send| MA["Actor A のメールボックス"]
-    Sender -->|send| MB["Actor B のメールボックス"]
-    MA -->|未登録なら A の処理を登録| Q["プール共通の実行待ちキュー"]
-    MB -->|未登録なら B の処理を登録| Q
-    Q --> D1["Domain 1 の dispatcher"]
-    Q --> D2["Domain 2 の dispatcher"]
-    D1 --> F1["Fiber：メッセージ一件を処理"]
-    D2 --> F2["Fiber：メッセージ一件を処理"]
-    F1 -->|完了後、残りがあれば末尾へ| Q
-    F2 -->|完了後、残りがあれば末尾へ| Q
+    Sender["Sender"] -->|send| MA["Actor A mailbox"]
+    Sender -->|send| MB["Actor B mailbox"]
+    MA -->|enqueue A if idle| Q["Shared ready queue"]
+    MB -->|enqueue B if idle| Q
+    Q --> D1["Domain 1 dispatcher"]
+    Q --> D2["Domain 2 dispatcher"]
+    D1 --> F1["Fiber handles one message"]
+    D2 --> F2["Fiber handles one message"]
+    F1 -->|requeue at the tail if messages remain| Q
+    F2 -->|requeue at the tail if messages remain| Q
 ```
 
-各 Actor の登録状態は `scheduled` フラグで管理されており、実行待ちキューへの登録から 1 件の処理が終わるまで（Eio での待機中も含めて）`true` に保たれます。これにより、同じ Actor の後続メッセージが追い越して実行されることはありません。また、1 件処理するごとにメールボックスの残りを実行待ちキューの末尾へ並び直すため、特定の Actor にメッセージが集中しても他の Actor に順番が回ります。
+An actor's `scheduled` flag stays `true` from the time its job enters the ready queue until the handler finishes, including while it waits on Eio. This keeps later messages for the same actor from starting early. If messages remain when the handler finishes, the next job goes to the tail of the ready queue so other actors get a turn even when one actor receives many messages.
 
-ワーカーが複数ある場合や I/O 待機を含む場合は、異なる Actor 間でどちらが先に終わるかは決まりません。同じ Actor でもメッセージごとに担当 Domain が変わることがあるため、状態は [Domain ローカルストレージ（DLS）](https://ocaml.org/manual/5.5/api/Domain.DLS.html)に置かず、ハンドラーの引数と戻り値で受け渡してください。処理の前後でプール共通の [Mutex](https://ocaml.org/manual/5.5/api/Mutex.html) を解放・取得するため、前のワーカーが更新した状態は次の担当ワーカーから安全に参照できます（[メモリモデル](https://ocaml.org/manual/5.5/memorymodel.html)参照）。ただし、状態やメッセージの値自体はコピーされないため、可変なデータを外部と共有する場合は呼び出し側で同期してください。
+With multiple workers or handlers that wait on I/O, completion order across actors is unspecified. Because successive messages for the same actor may run on different domains, pass state through the handler's argument and return value rather than storing it in [domain-local storage (DLS)](https://ocaml.org/manual/5.5/api/Domain.DLS.html). Acquiring and releasing the pool's [`Mutex`](https://ocaml.org/manual/5.5/api/Mutex.html) around each step makes state updates visible to the next worker under the [OCaml memory model](https://ocaml.org/manual/5.5/memorymodel.html). State and message values are passed without copying, so synchronize access yourself if you share mutable data outside the actor.
 
-## 送信と終了の保証
+## Sending messages and shutting down
 
-`Actor.send` は、メールボックスへメッセージを追加できれば `true`、Actor またはプールがすでに閉じていれば `false` を返します。メールボックスに容量制限はないため空き待ちでブロックすることはなく、同じ送信元からのメッセージ順序は常に保たれます。なお、`true` はメールボックスへの追加を表すだけでハンドラーの完了は意味しないため、処理結果を受け取りたい場合は返信用の [Eio.Promise](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) や返信先 Actor をメッセージに含めて渡します（[examples/counter.ml](examples/counter.ml) 参照）。
+`Actor.send` returns `true` when it adds the message to the mailbox and `false` when the actor or pool is already closed. Mailboxes are unbounded, so sending never blocks waiting for capacity, and messages from the same sender always keep their order. A `true` return value only confirms that the message was queued, not that its handler has finished; to receive a result, include an [`Eio.Promise`](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) resolver or a reply actor in the message (see [examples/counter.ml](examples/counter.ml)).
 
-個別の Actor を終了するときは、`Actor.stop` で新規送信を締め切ってから `Actor.join` で処理の完了を待ちます。`stop` は実行中のハンドラーを中断せず即座に戻り、締め切り前に受理されたメッセージは最後まで処理されます。`join` の待機中は呼び出し元の Fiber が中断されるだけなので同じ Domain の他の Fiber は動作でき、もし待機中に呼び出し元がキャンセルされても Actor 自体は止まりません。デッドロックを避けるため、ハンドラー内からは `join` を呼ばないでください。
+To shut down an individual actor, call `Actor.stop` to close its mailbox to new sends, then call `Actor.join` to wait for it to finish. `stop` returns immediately without interrupting a running handler, and any messages accepted before `stop` run to completion. While `join` waits, only the calling fiber suspends, so other fibers on the same domain can run; canceling the waiting fiber leaves the actor running. To avoid deadlocks, do not call `join` from inside an actor handler.
 
-`Pool.shutdown` は、プール内の全 Actor への送信と新規 Actor の起動を締め切り、受理済みの処理と全ワーカーの終了を待ちます。実行待ちキューが空になっても、I/O 待ちのハンドラーが残っている間はワーカーを止めません。ハンドラーが無限に待機すると `shutdown` も戻らなくなるため、外部 I/O などを待つ場合は [Eio.Time](https://ocaml-multicore.github.io/eio/eio/Eio/Time/index.html) でタイムアウトを設けてください。また、`shutdown` 後はプール内の別 Actor へ返信を送れなくなるため、返信を伴う処理では [examples/counter.ml](examples/counter.ml) のように要求元の Actor を先に `stop`・`join` してから返信先とプールを閉じてください。
+`Pool.shutdown` closes the pool to new actors and sends, then waits for accepted work to finish and all workers to exit. Workers stay alive while handlers are waiting on I/O, even when the ready queue is empty. Because a handler that waits indefinitely also prevents `shutdown` from returning, use [`Eio.Time`](https://ocaml-multicore.github.io/eio/eio/Eio/Time/index.html) to set timeouts on external I/O. Once `shutdown` begins, sends within the pool are rejected, including replies. When one actor sends a reply to another (as in [examples/counter.ml](examples/counter.ml)), `stop` and `join` the sender before stopping the recipient and shutting down the pool.
 
-## ハンドラーの例外
+## Handler exceptions
 
-ハンドラーで未捕捉の例外が起きると、その Actor は閉鎖されて残りの未処理メッセージを破棄します。例外と[バックトレース](https://ocaml.org/manual/5.5/api/Printexc.html)はその Actor 内に保存され、ワーカーや他の Actor は影響を受けずに動き続けます。保存された例外は、その Actor に `Actor.join` を呼んだときに [Printexc.raise_with_backtrace](https://ocaml.org/manual/5.5/api/Printexc.html) で再送出されます。`Pool.shutdown` は個々の Actor の例外を送出しないため、成否を確認したい Actor には個別に `join` を呼んでください。
+An uncaught exception in a handler closes that actor and discards its remaining messages. The actor stores the exception and backtrace, while workers and other actors keep running. Calling `Actor.join` on the actor re-raises the saved exception with its original backtrace via [`Printexc.raise_with_backtrace`](https://ocaml.org/manual/5.5/api/Printexc.html). Because `Pool.shutdown` does not raise actor exceptions, call `join` on individual actors to check whether they succeeded.
 
-## テスト
+## Tests
 
-`dune runtest` で実行される [test/actor_test.ml](test/actor_test.ml) では、FIFO 順序や状態の引き継ぎ、1 件ごとの交代、複数 Domain での並列実行に加え、単一 Domain 上でのパイプ I/O、待機中の直列性維持、キャンセルや例外発生時の後始末などを検証しています。タイミングによる不安定さを避けるため、スリープは使わず [Eio.Promise](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) と標準の [Condition](https://ocaml.org/manual/5.5/api/Condition.html) で実行順を揃えています。
+The test suite in [test/actor_test.ml](test/actor_test.ml) (run with `dune runtest`) checks FIFO message order, state handoff, fair per-message turn-taking, and parallel execution across domains, as well as pipe I/O on a single domain, per-actor serialization while a handler is suspended, and cleanup after cancellation or exceptions. To avoid timing-dependent flakiness, the tests coordinate execution order with [`Eio.Promise`](https://ocaml-multicore.github.io/eio/eio/Eio/Promise/index.html) and the standard library's [`Condition`](https://ocaml.org/manual/5.5/api/Condition.html) instead of sleeping.
 
-## コーディング規約
+## Coding conventions
 
-整形には OCamlFormat 0.29.0 の `janestreet` プロファイルを使います。
-命名やコメントは [OCaml Programming Guidelines](https://ocaml.org/docs/guidelines) を参考にし、
-関数・変数・型は `snake_case`、モジュール・コンストラクターは大文字で始めます。
-公開 API の使い方はシグネチャの文書コメント（`(** ... *)`）、実装上の理由や不変条件は該当コードの通常コメント（`(* ... *)`）に記述します。
-このプロジェクトでは、シグネチャも `.ml` にまとめます。
+Formatting uses OCamlFormat 0.29.0 with the `janestreet` profile. Following the [OCaml Programming Guidelines](https://ocaml.org/docs/guidelines), functions, variables, and types use `snake_case`, while module and constructor names start with an uppercase letter. Document public API usage in signature doc comments (`(** ... *)`), and explain implementation rationale and invariants in regular comments (`(* ... *)`) next to the relevant code. This project keeps the module signature in the `.ml` file.
 
 ```sh
 opam install 'ocamlformat=0.29.0'
-dune fmt          # 整形を適用
-dune build @fmt  # 整形のチェック
+dune fmt         # Apply formatting
+dune build @fmt  # Check formatting
 ```
 
-## 参考資料
+## References
 
-公開 API と実装は [lib/acterious.ml](lib/acterious.ml) にまとめています。Eio の Fiber や Promise、Flow などの API も併せて参照してください。
+The public API and implementation are in [lib/acterious.ml](lib/acterious.ml).
 
-- [OCaml 5.5 API リファレンス](https://ocaml.org/manual/5.5/api/index.html) / [OCaml 5.5.0 リリース情報](https://ocaml.org/releases/5.5.0)
-- [Eio API リファレンス](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) / [Eio 公式 README](https://github.com/ocaml-multicore/eio)
+- [OCaml 5.5 API reference](https://ocaml.org/manual/5.5/api/index.html) · [OCaml 5.5.0 release notes](https://ocaml.org/releases/5.5.0)
+- [Eio API reference](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) · [Eio README](https://github.com/ocaml-multicore/eio)

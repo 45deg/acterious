@@ -9,7 +9,9 @@ let finish actor =
   Actor.join actor
 ;;
 
-(* sleep に頼らず、テスト側とハンドラーの実行順を決めるための通知。 *)
+(* sleep に頼らず、テスト側とハンドラーの実行順を決めるための通知。
+
+   Synchronization primitives to order test and handler steps without sleeping. *)
 let blocking_event () =
   let mutex = Mutex.create () in
   let condition = Condition.create () in
@@ -40,7 +42,9 @@ let test_fifo_and_drain pool =
   in
   List.iter (send actor) [ 1; 2; 3 ];
   finish actor;
-  (* ref はハンドラーだけが変更し、テスト側は join 後に読む。 *)
+  (* ref はハンドラーだけが変更し、テスト側は join 後に読む。
+
+     Only the handler mutates received; the test reads it after join. *)
   check (List.rev !received = [ 1; 2; 3 ]) "終了時の FIFO 処理に失敗"
 ;;
 
@@ -79,7 +83,9 @@ let test_stop_during_handler pool =
   in
   send actor 1;
   wait_started ();
-  (* ハンドラーが待機中でも、送信と stop はロックに阻まれない。 *)
+  (* ハンドラーが待機中でも、送信と stop はロックに阻まれない。
+
+     Even while the handler is suspended, send and stop do not block on the lock. *)
   send actor 2;
   Actor.stop actor;
   let rejected = not (Actor.send actor 3) in
@@ -139,12 +145,14 @@ let test_failure pool =
    | exception Handler_failed -> ());
   check (!processed = []) "例外終了後もメッセージを処理しています";
   check (not (Actor.send actor 3)) "例外終了後に送信が受理されました";
-  (* 失敗したアクターと同じプールを、そのまま使える。 *)
+  (* 失敗したアクターと同じプールを、そのまま使える。
+
+     The pool remains usable after an actor fails. *)
   let received = ref false in
   let healthy = Actor.spawn pool ~initial:() (fun () () -> received := true) in
   send healthy ();
   finish healthy;
-  check !received "アクターの例外でワーカーが失われました"
+  check !received "Actor の例外でワーカーが失われました"
 ;;
 
 let test_shared_worker pool =
@@ -155,9 +163,11 @@ let test_shared_worker pool =
   in
   List.iter (fun actor -> send actor ()) actors;
   List.iter finish actors;
-  (* このテストは 1 ワーカーで動かすので、共有 ref の書き手も 1 つ。 *)
-  check (List.length !domains = 200) "全アクターが実行されていません";
-  check (List.length (List.sort_uniq compare !domains) = 1) "アクターごとに別の Domain が使われています";
+  (* このテストは 1 ワーカーで動かすので、共有 ref の書き手も 1 つ。
+
+     This test runs on a single worker, so only one domain writes to domains. *)
+  check (List.length !domains = 200) "全 Actor が実行されていません";
+  check (List.length (List.sort_uniq compare !domains) = 1) "Actor ごとに別の Domain が使われています";
   check
     (List.for_all (fun domain -> domain <> Domain.self ()) !domains)
     "メイン Domain で処理しています"
@@ -176,13 +186,15 @@ let test_fair_turns pool =
   let order = ref [] in
   let busy = Actor.spawn pool ~initial:() (fun () n -> order := n :: !order) in
   let other = Actor.spawn pool ~initial:() (fun () n -> order := n :: !order) in
-  (* ワーカーを待たせている間に、確定した順序でキューを作る。 *)
+  (* ワーカーを待たせている間に、確定した順序でキューを作る。
+
+     Build up the ready queue in a deterministic order while the worker is blocked. *)
   List.iter (send busy) [ 1; 2; 3 ];
   send other 99;
   signal_continue ();
   finish blocker;
   List.iter finish [ busy; other ];
-  check (List.rev !order = [ 1; 99; 2; 3 ]) "1 メッセージごとに他のアクターへ番を渡していません"
+  check (List.rev !order = [ 1; 99; 2; 3 ]) "1 メッセージごとに他の Actor へ番を渡していません"
 ;;
 
 let test_parallel_actors pool =
@@ -202,10 +214,12 @@ let test_parallel_actors pool =
   send first ();
   wait_started ();
   send second ();
-  (* first が待っていても、別のワーカーが second を完了できる。 *)
+  (* first が待っていても、別のワーカーが second を完了できる。
+
+     Even while first is blocked, another worker can run second to completion. *)
   Fun.protect ~finally:signal_continue (fun () -> finish second);
   finish first;
-  check (!first_domain <> !second_domain) "別アクターが並列に動いていません"
+  check (!first_domain <> !second_domain) "別 Actor が並列に動いていません"
 ;;
 
 let test_shutdown pool =
@@ -221,19 +235,25 @@ let test_shutdown pool =
        done)
     actors;
   (* 個別に stop しなくても、メールボックスに追加済みのメッセージを処理し、
-     全ワーカーを回収する。 *)
+     全ワーカーを回収する。
+
+     Pool.shutdown drains already-queued messages and joins all workers even when
+     individual actors were not stopped first. *)
   Pool.shutdown pool;
   Pool.shutdown pool;
   List.iter Actor.join (idle :: actors);
   check (List.for_all (fun count -> !count = 20) counts) "終了時にタスクが残りました";
   check (not (Actor.send idle ())) "プール終了後に送信を受理しました";
   match Actor.spawn pool ~initial:() (fun () () -> ()) with
-  | _ -> failwith "プール終了後にアクターを起動しました"
+  | _ -> failwith "プール終了後に Actor を起動しました"
   | exception Invalid_argument _ -> ()
 ;;
 
 (* 同じ Domain 上で待機中のハンドラーを追い越せるが、同じ Actor の
-   次のメッセージは追い越せないことを確認する。 *)
+   次のメッセージは追い越せないことを確認する。
+
+   Verify that another actor can run while a handler is suspended on the same
+   domain, whereas the next message for the same actor cannot overtake it. *)
 let test_cooperative_wait pool =
   let wait_started, signal_started = event () in
   let wait_continue, signal_continue = event () in
@@ -255,7 +275,9 @@ let test_cooperative_wait pool =
   Actor.stop actor;
   let helper = Actor.spawn pool ~initial:() (fun () () -> signal_continue ()) in
   send helper ();
-  (* join はメイン Domain の Fiber にも実行機会を渡す。 *)
+  (* join はメイン Domain の Fiber にも実行機会を渡す。
+
+     Actor.join yields so other fibers on the calling domain can run. *)
   Eio.Fiber.both (fun () -> Actor.join actor) (fun () -> finish helper);
   Actor.join actor;
   check (List.rev !received = [ 1; 2 ]) "待機を含む FIFO 処理に失敗"
@@ -334,7 +356,9 @@ let test_shutdown_waiting_handler pool =
   Eio.Fiber.both
     (fun () -> Pool.shutdown pool)
     (fun () ->
-       (* shutdown は最初の中断より前に送信を締め切る。 *)
+       (* shutdown は最初の中断より前に送信を締め切る。
+
+          Pool.shutdown closes the pool to new sends before suspending to wait. *)
        check (not (Actor.send actor 3)) "shutdown 後に送信を受理しました";
        check (!received = []) "待機中の処理を待たずに終了しました";
        signal_continue ());
@@ -431,9 +455,9 @@ let () =
     ; "処理中の終了要求", 2, test_stop_during_handler
     ; "複数 Domain からの送信", 2, test_concurrent_senders
     ; "例外の伝播とワーカーの継続", 1, test_failure
-    ; "200 アクターで 1 ワーカーを共有", 1, test_shared_worker
+    ; "200 個の Actor で 1 ワーカーを共有", 1, test_shared_worker
     ; "1 件ずつ交代", 1, test_fair_turns
-    ; "別アクターの並列実行", 2, test_parallel_actors
+    ; "別 Actor の並列実行", 2, test_parallel_actors
     ; "プール全体の終了", 2, test_shutdown
     ; "1 Domain で待機を共有し Actor は直列実行", 1, test_cooperative_wait
     ; "同じ Domain の Actor 間の pipe I/O", 1, test_pipe_io
