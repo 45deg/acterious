@@ -154,3 +154,7 @@ The public API and implementation are in [lib/acterious.ml](lib/acterious.ml).
 
 - [OCaml 5.5 API reference](https://ocaml.org/manual/5.5/api/index.html) · [OCaml 5.5.0 release notes](https://ocaml.org/releases/5.5.0)
 - [Eio API reference](https://ocaml-multicore.github.io/eio/eio/Eio/index.html) · [Eio README](https://github.com/ocaml-multicore/eio)
+
+## License
+
+Acterious is available under the [MIT License](LICENSE).
